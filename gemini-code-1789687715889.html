@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Mouse Count: Beware the Snake!</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      background: #7ec850;
+      font-family: 'Comic Sans MS', 'Chalkboard SE', sans-serif;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+
+    #game-container {
+      position: relative;
+      width: 900px;
+      height: 550px;
+      max-width: 100vw;
+      max-height: 100vh;
+      background: linear-gradient(to bottom, #87ceeb 0%, #cceeff 60%, #7ec850 60%, #5ca038 100%);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    #ui-overlay {
+      position: absolute;
+      top: 15px;
+      left: 15px;
+      right: 15px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      pointer-events: none;
+    }
+
+    .badge {
+      background: rgba(255, 255, 255, 0.9);
+      padding: 10px 18px;
+      border-radius: 30px;
+      font-size: 20px;
+      font-weight: bold;
+      color: #333;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+      border: 3px solid #ffcc00;
+    }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      pointer-events: auto;
+    }
+
+    button {
+      background: #ff5555;
+      color: white;
+      border: 3px solid white;
+      padding: 10px 18px;
+      font-size: 18px;
+      font-weight: bold;
+      border-radius: 50px;
+      cursor: pointer;
+      box-shadow: 0 5px 0 #cc0000, 0 8px 12px rgba(0,0,0,0.2);
+      transition: transform 0.1s;
+    }
+
+    button:active {
+      transform: translateY(3px);
+      box-shadow: 0 2px 0 #cc0000, 0 4px 8px rgba(0,0,0,0.2);
+    }
+
+    #btn-music {
+      background: #4caf50;
+      box-shadow: 0 5px 0 #2e7d32, 0 8px 12px rgba(0,0,0,0.2);
+    }
+
+    #msg-banner {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(0);
+      background: #ffec3d;
+      border: 6px solid #ff9900;
+      color: #5c3d00;
+      font-size: 40px;
+      font-weight: 900;
+      padding: 20px 30px;
+      border-radius: 30px;
+      text-align: center;
+      box-shadow: 0 15px 30px rgba(0,0,0,0.4);
+      transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      pointer-events: auto;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 15px;
+    }
+
+    #msg-banner.show {
+      transform: translate(-50%, -50%) scale(1);
+    }
+  </style>
+</head>
+<body>
+
+  <div id="game-container">
+    <canvas id="gameCanvas" width="900" height="550"></canvas>
+    
+    <div id="ui-overlay">
+      <div class="badge" id="level-indicator">Level 1: The Easy Hill</div>
+      <div class="badge" id="counter">Mice Freed: 0 / 10</div>
+      <div class="controls">
+        <button id="btn-music">🎵 Music: ON</button>
+        <button id="btn-reset">Reset 🪨</button>
+      </div>
+    </div>
+
+    <div id="msg-banner">
+      <span id="banner-text">MICE ARE FREE! 🎉</span>
+      <button id="btn-next">Next Level ➡️</button>
+    </div>
+  </div>
+
+  <script>
+    // --- AUDIO SYSTEM & PROCEDURAL MUSIC ---
+    const AudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    let musicPlaying = true;
+    let musicTimer = null;
+    let noteIndex = 0;
+
+    const melody = [
+      261.63, 329.63, 392.00, 523.25, 392.00, 329.63,
+      293.66, 349.23, 440.00, 523.25, 440.00, 349.23,
+      329.63, 392.00, 523.25, 659.25, 523.25, 392.00,
+      392.00, 349.23, 329.63, 293.66, 261.63, 0
+    ];
+
+    function playTone(freq, duration, type='sine', startVol=0.2) {
+      if (AudioCtx.state === 'suspended' && musicPlaying) AudioCtx.resume();
+      if (freq === 0) return;
+
+      const osc = AudioCtx.createOscillator();
+      const gain = AudioCtx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, AudioCtx.currentTime);
+      gain.gain.setValueAtTime(startVol, AudioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, AudioCtx.currentTime + duration);
+      osc.connect(gain);
+      gain.connect(AudioCtx.destination);
+      osc.start();
+      osc.stop(AudioCtx.currentTime + duration);
+    }
+
+    function playBackgroundMusicStep() {
+      if (!musicPlaying) return;
+      const freq = melody[noteIndex % melody.length];
+      playTone(freq, 0.22, 'triangle', 0.08);
+      noteIndex++;
+    }
+
+    function startMusic() {
+      if (!musicTimer) {
+        musicTimer = setInterval(playBackgroundMusicStep, 250);
+      }
+    }
+
+    function stopMusic() {
+      clearInterval(musicTimer);
+      musicTimer = null;
+    }
+
+    function soundThud() {
+      playTone(90, 0.2, 'triangle', 0.4);
+    }
+
+    function soundHiss() {
+      playTone(600, 0.25, 'sawtooth', 0.15);
+    }
+
+    function soundCheer() {
+      const notes = [261, 329, 392, 523, 659];
+      notes.forEach((freq, idx) => {
+        setTimeout(() => playTone(freq, 0.3, 'sine', 0.3), idx * 80);
+      });
+    }
+
+    function soundSqueak() {
+      playTone(800 + Math.random() * 400, 0.08, 'sine', 0.15);
+    }
+
+    // --- LEVEL CONFIGURATIONS ---
+    const LEVELS = [
+      {
+        name: "Level 1: Easy Bump",
+        hillEnd: 350,
+        hillHeight: 220,
+        snakeX: 500,
+        jarX: 680,
+        rockMass: 1.0,
+        rockRadius: 45
+      },
+      {
+        name: "Level 2: Snake Guard",
+        hillEnd: 280,
+        hillHeight: 180,
+        snakeX: 480,
+        jarX: 740,
+        rockMass: 0.85,
+        rockRadius: 40
+      },
+      {
+        name: "Level 3: Big Challenge",
+        hillEnd: 380,
+        hillHeight: 240,
+        snakeX: 550,
+        jarX: 780,
+        rockMass: 0.65,
+        rockRadius: 55
+      }
+    ];
+
+    let currentLevelIdx = 0;
+
+    // --- GAME ENGINE & SETUP ---
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const counterEl = document.getElementById('counter');
+    const levelEl = document.getElementById('level-indicator');
+    const msgBanner = document.getElementById('msg-banner');
+    const bannerText = document.getElementById('banner-text');
+    const resetBtn = document.getElementById('btn-reset');
+    const musicBtn = document.getElementById('btn-music');
+    const nextBtn = document.getElementById('btn-next');
+
+    const GRAVITY = 0.35;
+    const FRICTION = 0.985;
+
+    let rock, jar, snake, mice = [];
+    let freedCount = 0;
+    let isVictory = false;
+
+    let isDragging = false;
+    let dragStart = { x: 0, y: 0 };
+    let dragCurrent = { x: 0, y: 0 };
+
+    class Rock {
+      constructor(x, y, radius, mass) {
+        this.x = x;
+        this.y = y;
+        this.radius = radius;
+        this.mass = mass;
+        this.vx = 0;
+        this.vy = 0;
+        this.isLaunched = false;
+        this.angle = 0;
+      }
+
+      update() {
+        if (!this.isLaunched) return;
+
+        this.vy += GRAVITY;
+        this.vx *= FRICTION;
+        this.vy *= FRICTION;
+
+        this.x += this.vx;
+        this.y += this.vy;
+        this.angle += this.vx * 0.04;
+
+        const groundY = getGroundHeight(this.x);
+        if (this.y + this.radius > groundY) {
+          this.y = groundY - this.radius;
+          this.vy *= -0.3;
+          this.vx *= 0.93;
+          if (Math.abs(this.vy) > 1) soundThud();
+        }
+
+        if (this.x - this.radius < 0) {
+          this.x = this.radius;
+          this.vx *= -0.5;
+        }
+        if (this.x + this.radius > canvas.width) {
+          this.x = canvas.width - this.radius;
+          this.vx *= -0.5;
+        }
+      }
+
+      draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.angle);
+
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = '#808080';
+        ctx.fill();
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = '#505050';
+        ctx.stroke();
+
+        ctx.fillStyle = '#606060';
+        ctx.beginPath();
+        ctx.arc(-10, -8, this.radius * 0.2, 0, Math.PI * 2);
+        ctx.arc(8, 10, this.radius * 0.25, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+    }
+
+    class Snake {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.radius = 35;
+        this.isAwake = false;
+      }
+
+      wakeUp() {
+        if (!this.isAwake) {
+          this.isAwake = true;
+          soundHiss();
+        }
+      }
+
+      draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        // Snake Body Coils
+        ctx.fillStyle = '#4caf50';
+        ctx.strokeStyle = '#2e7d32';
+        ctx.lineWidth = 4;
+
+        ctx.beginPath();
+        ctx.arc(-20, 10, 22, 0, Math.PI * 2);
+        ctx.arc(0, 15, 20, 0, Math.PI * 2);
+        ctx.arc(20, 10, 22, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Yellow Spots
+        ctx.fillStyle = '#ffeb3b';
+        ctx.beginPath();
+        ctx.arc(-20, 5, 6, 0, Math.PI * 2);
+        ctx.arc(0, 10, 5, 0, Math.PI * 2);
+        ctx.arc(20, 5, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Snake Head
+        ctx.fillStyle = '#4caf50';
+        ctx.beginPath();
+        ctx.arc(-35, -5, 18, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Eyes (Sleeping vs Awake)
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 3;
+        if (!this.isAwake) {
+          // Sleeping Zz eyes
+          ctx.beginPath();
+          ctx.moveTo(-42, -8);
+          ctx.lineTo(-36, -8);
+          ctx.stroke();
+
+          // Zzz Bubble floating
+          ctx.fillStyle = '#1e88e5';
+          ctx.font = 'bold 18px sans-serif';
+          ctx.fillText('Zzz...', -55, -25);
+        } else {
+          // Awake surprised eyes
+          ctx.fillStyle = '#fff';
+          ctx.beginPath();
+          ctx.arc(-40, -10, 6, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#000';
+          ctx.beginPath();
+          ctx.arc(-40, -10, 3, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Tongue out
+          ctx.strokeStyle = '#e53935';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(-52, -2);
+          ctx.lineTo(-62, -2);
+          ctx.lineTo(-67, -6);
+          ctx.moveTo(-62, -2);
+          ctx.lineTo(-67, 2);
+          ctx.stroke();
+        }
+
+        ctx.restore();
+      }
+    }
+
+    class Jar {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.width = 85;
+        this.height = 125;
+        this.angle = 0;
+        this.angularVel = 0;
+        this.isTipped = false;
+      }
+
+      update() {
+        if (this.isTipped) {
+          this.angle += this.angularVel;
+          this.angularVel *= 0.95;
+          if (this.angle > Math.PI / 2) {
+            this.angle = Math.PI / 2;
+          }
+        }
+      }
+
+      draw() {
+        ctx.save();
+        ctx.translate(this.x + this.width / 2, this.y + this.height);
+        ctx.rotate(this.angle);
+
+        ctx.fillStyle = 'rgba(200, 240, 255, 0.65)';
+        ctx.strokeStyle = 'rgba(100, 180, 220, 0.9)';
+        ctx.lineWidth = 5;
+
+        ctx.beginPath();
+        ctx.roundRect(-this.width / 2, -this.height, this.width, this.height, [10, 10, 20, 20]);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = 'rgba(180, 220, 240, 0.8)';
+        ctx.fillRect(-this.width / 2 - 5, -this.height, this.width + 10, 15);
+
+        ctx.restore();
+      }
+    }
+
+    class Mouse {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.radius = 11;
+        this.vx = 0;
+        this.vy = 0;
+        this.isEscaped = false;
+        this.color = '#d2b48c';
+      }
+
+      update() {
+        if (jar.isTipped && !this.isEscaped) {
+          this.isEscaped = true;
+          this.vx = (Math.random() * 6 + 2);
+          this.vy = -(Math.random() * 4 + 2);
+          freedCount++;
+          counterEl.innerText = `Mice Freed: ${freedCount} / 10`;
+          soundSqueak();
+
+          if (freedCount === 10) {
+            triggerVictory();
+          }
+        }
+
+        if (this.isEscaped) {
+          this.vy += GRAVITY;
+          this.x += this.vx;
+          this.y += this.vy;
+
+          const groundY = getGroundHeight(this.x);
+          if (this.y + this.radius > groundY) {
+            this.y = groundY - this.radius;
+            this.vy = -Math.abs(this.vy) * 0.5;
+          }
+        }
+      }
+
+      draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        ctx.fillStyle = '#ffb6c1';
+        ctx.beginPath();
+        ctx.arc(-5, -8, 4, 0, Math.PI * 2);
+        ctx.arc(5, -8, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.arc(5, -2, 2, 0, Math.PI * 2);
+        ctx.arc(10, 2, 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+    }
+
+    function getGroundHeight(x) {
+      const lvl = LEVELS[currentLevelIdx];
+      if (x < lvl.hillEnd) {
+        const t = x / lvl.hillEnd;
+        return lvl.hillHeight + t * (420 - lvl.hillHeight);
+      }
+      return 420;
+    }
+
+    function initLevel(lvlIndex) {
+      currentLevelIdx = lvlIndex;
+      const lvl = LEVELS[currentLevelIdx];
+
+      levelEl.innerText = lvl.name;
+      rock = new Rock(120, lvl.hillHeight - 20, lvl.rockRadius, lvl.rockMass);
+      snake = new Snake(lvl.snakeX, 395);
+      jar = new Jar(lvl.jarX, 295);
+      mice = [];
+      freedCount = 0;
+      isVictory = false;
+      counterEl.innerText = `Mice Freed: 0 / 10`;
+      msgBanner.classList.remove('show');
+
+      for (let i = 0; i < 10; i++) {
+        const col = i % 3;
+        const row = Math.floor(i / 3);
+        const mx = jar.x + 20 + col * 20;
+        const my = jar.y + jar.height - 18 - row * 20;
+        mice.push(new Mouse(mx, my));
+      }
+    }
+
+    function triggerVictory() {
+      isVictory = true;
+      snake.wakeUp();
+      setTimeout(() => {
+        if (currentLevelIdx < LEVELS.length - 1) {
+          bannerText.innerText = "LEVEL COMPLETE! 🎉";
+          nextBtn.innerText = "Next Level ➡️";
+        } else {
+          bannerText.innerText = "YOU WON THE GAME! 🏆";
+          nextBtn.innerText = "Play Again 🔄";
+        }
+        msgBanner.classList.add('show');
+        soundCheer();
+      }, 300);
+    }
+
+    function getCanvasCoords(e) {
+      const rect = canvas.getBoundingClientRect();
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      return {
+        x: (clientX - rect.left) * (canvas.width / rect.width),
+        y: (clientY - rect.top) * (canvas.height / rect.height)
+      };
+    }
+
+    function handleStart(e) {
+      if (AudioCtx.state === 'suspended') AudioCtx.resume();
+      if (rock.isLaunched) return;
+      const pos = getCanvasCoords(e);
+      const dist = Math.hypot(pos.x - rock.x, pos.y - rock.y);
+      if (dist < rock.radius + 20) {
+        isDragging = true;
+        dragStart = { x: rock.x, y: rock.y };
+        dragCurrent = pos;
+      }
+    }
+
+    function handleMove(e) {
+      if (!isDragging) return;
+      dragCurrent = getCanvasCoords(e);
+    }
+
+    function handleEnd() {
+      if (!isDragging) return;
+      isDragging = false;
+
+      const dx = dragStart.x - dragCurrent.x;
+      const dy = dragStart.y - dragCurrent.y;
+
+      rock.vx = dx * 0.25 * rock.mass;
+      rock.vy = dy * 0.25 * rock.mass;
+      rock.isLaunched = true;
+    }
+
+    canvas.addEventListener('mousedown', handleStart);
+    canvas.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleEnd);
+
+    canvas.addEventListener('touchstart', handleStart);
+    canvas.addEventListener('touchmove', handleMove);
+    window.addEventListener('touchend', handleEnd);
+
+    resetBtn.addEventListener('click', () => initLevel(currentLevelIdx));
+
+    musicBtn.addEventListener('click', () => {
+      musicPlaying = !musicPlaying;
+      if (musicPlaying) {
+        musicBtn.innerText = "🎵 Music: ON";
+        startMusic();
+      } else {
+        musicBtn.innerText = "🔇 Music: OFF";
+        stopMusic();
+      }
+    });
+
+    nextBtn.addEventListener('click', () => {
+      let nextIdx = currentLevelIdx + 1;
+      if (nextIdx >= LEVELS.length) nextIdx = 0;
+      initLevel(nextIdx);
+    });
+
+    function gameLoop() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const lvl = LEVELS[currentLevelIdx];
+
+      // Draw Hill & Path
+      ctx.fillStyle = '#6ab04c';
+      ctx.beginPath();
+      ctx.moveTo(0, lvl.hillHeight);
+      ctx.lineTo(lvl.hillEnd, 420);
+      ctx.lineTo(canvas.width, 420);
+      ctx.lineTo(canvas.width, canvas.height);
+      ctx.lineTo(0, canvas.height);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = '#488232';
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(0, lvl.hillHeight);
+      ctx.lineTo(lvl.hillEnd, 420);
+      ctx.lineTo(canvas.width, 420);
+      ctx.stroke();
+
+      // Slingshot Aim Line
+      if (isDragging) {
+        ctx.beginPath();
+        ctx.moveTo(rock.x, rock.y);
+        ctx.lineTo(dragCurrent.x, dragCurrent.y);
+        ctx.strokeStyle = '#ff3333';
+        ctx.lineWidth = 6;
+        ctx.setLineDash([8, 8]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      rock.update();
+      jar.update();
+
+      // Rock -> Snake Collision
+      const distSnake = Math.hypot(rock.x - snake.x, rock.y - snake.y);
+      if (distSnake < rock.radius + snake.radius) {
+        rock.vx *= -0.6; // Bounce back off snake!
+        snake.wakeUp();
+      }
+
+      // Rock -> Jar Collision
+      const jarCenterX = jar.x + jar.width / 2;
+      const jarCenterY = jar.y + jar.height / 2;
+      const distJar = Math.hypot(rock.x - jarCenterX, rock.y - jarCenterY);
+
+      if (distJar < rock.radius + jar.width / 2 && !jar.isTipped) {
+        jar.isTipped = true;
+        jar.angularVel = 0.15;
+        snake.wakeUp();
+        soundThud();
+      }
+
+      // Render Game Objects
+      snake.draw();
+      jar.draw();
+      mice.forEach(m => {
+        m.update();
+        m.draw();
+      });
+      rock.draw();
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    initLevel(0);
+    startMusic();
+    gameLoop();
+  </script>
+</body>
+</html>
